@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}My Courses | IQARUS TMS{% endblock %}
+{% block page_heading %}My Courses{% endblock %}
+{% block content %}
+<section class="module-page">
+  <header class="module-heading">
+    <div>
+      <p class="module-kicker">COURSE WORKSPACE</p>
+      <h2>My Courses</h2>
+      <p>Open a course to manage registration, lists, results and equipment use.</p>
+    </div>
+    {% if can_create %}
+    <a class="button-primary" href="{% url 'course_create' %}">Create Course</a>
+    {% endif %}
+  </header>
+
+  {% if messages %}
+  <ul class="message-list">{% for message in messages %}<li>{{ message }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  <form class="compact-search" method="get">
+    <label class="sr-only" for="course-search">Search courses</label>
+    <input id="course-search" name="q" value="{{ search }}" placeholder="Search by course, reference or camp">
+    <button class="button-primary" type="submit">Search</button>
+    {% if search %}<a class="button-secondary" href="{% url 'my_courses' %}">Clear</a>{% endif %}
+  </form>
+
+  <div class="course-row-list">
+  {% for row in rows %}
+    <article class="course-row">
+      <div class="course-row-main">
+        <h3>{{ row.session.course.title_english }}</h3>
+        <div class="course-key-details">
+          <div class="course-camp-block">
+            <span class="course-field-label">Camp</span>
+            <strong class="course-camp-name">{{ row.session.camp|default:"Camp not set" }}</strong>
+          </div>
+          <div class="course-date-block">
+            <span class="course-field-label">Dates</span>
+            <span class="course-date-value">{{ row.session.start_date|date:"d M Y" }} – {{ row.session.end_date|date:"d M Y" }}</span>
+          </div>
+        </div>
+        <div class="course-instructors">
+          <strong class="course-instructors-label">Instructors</strong>
+          <div class="instructor-tag-list">
+            {% for assignment in row.assignments %}
+              <span class="instructor-tag">{{ assignment.instructor.name_english }}</span>
+            {% empty %}
+              <span class="instructor-empty">Not assigned</span>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <div class="course-row-status" aria-label="Course status and counts">
+        <span class="status-pill {% if row.session.status == 'cancelled' %}status-danger{% elif row.session.status == 'completed' %}status-success{% endif %}">{{ row.session.get_status_display }}</span>
+        <span><strong>{{ row.registration_count }}</strong> registered</span>
+        <span><strong>{{ row.selected_count }}</strong> selected</span>
+        <span><strong>{{ row.session.capacity|default:"—" }}</strong> capacity</span>
+        {% if row.own_assignment %}
+          {% if row.own_assignment.acknowledged_at %}<span class="status-success-text">Acknowledged</span>{% else %}<span class="status-warning-text">Acknowledge needed</span>{% endif %}
+        {% endif %}
+      </div>
+
+      <a class="row-action" href="{% url 'instructor_course_workspace' row.session.public_id %}">View Course</a>
+    </article>
+  {% empty %}
+    <div class="empty-panel"><h3>No courses found</h3><p>{% if search %}Try a different search.{% else %}Assigned courses will appear here.{% endif %}</p></div>
+  {% endfor %}
+  </div>
+</section>
+{% endblock %}

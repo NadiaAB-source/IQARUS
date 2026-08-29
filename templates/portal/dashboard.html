@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard | IQARUS TMS{% endblock %}
+{% block page_heading %}Dashboard{% endblock %}
+
+{% block content %}
+<section class="dashboard-intro">
+    <div>
+        <h2>Good to see you, {{ user.first_name|default:user.username }}.</h2>
+        <p>
+            Manage training operations from one clear and secure workspace.
+        </p>
+    </div>
+    <span class="system-ready">System online</span>
+</section>
+
+<section class="metric-grid">
+    {% for stat in stats %}
+    <article class="metric-card {{ stat.tone }}">
+        <div class="metric-content">
+            <span class="metric-label">{{ stat.label }}</span>
+            <strong class="odometer-value" aria-label="{{ stat.value }}">
+                {% with digits=stat.value|stringformat:"s" %}
+                    {% for digit in digits %}
+                    <span class="odometer-digit" aria-hidden="true">{{ digit }}</span>
+                    {% endfor %}
+                {% endwith %}
+            </strong>
+        </div>
+    </article>
+    {% endfor %}
+</section>
+
+<section class="content-section">
+    <div class="section-title">
+        <div>
+            <h2>Operations</h2>
+            <p>Choose an area to continue your work.</p>
+        </div>
+    </div>
+
+    <div class="operation-grid">
+        {% for item in operations %}
+        <a class="operation-card" href="{{ item.url }}">
+            <span class="operation-code">{{ item.code }}</span>
+            <div>
+                <h3>{{ item.name }}</h3>
+                <p>{{ item.description }}</p>
+            </div>
+            <span class="card-arrow">→</span>
+        </a>
+        {% endfor %}
+    </div>
+</section>
+
+{% if user.is_staff %}
+<section class="review-panel">
+    <div>
+        <p class="eyebrow">ADMINISTRATION</p>
+        <h2>Data-quality workbench</h2>
+        <p>
+            Historical migration controls are kept separate from
+            everyday training operations.
+        </p>
+    </div>
+
+    <div class="review-counts">
+        <span><strong>{{ review_summary.student_proposals }}</strong> student reviews</span>
+        <span><strong>{{ review_summary.course_proposals }}</strong> course reviews</span>
+        <span><strong>{{ review_summary.alias_reviews }}</strong> alias reviews</span>
+        <span><strong>{{ review_summary.data_issues }}</strong> data issues</span>
+    </div>
+
+    <a class="secondary-button" href="{% url 'data_quality' %}">
+        Open Data Quality
+    </a>
+</section>
+{% endif %}
+{% endblock %}
