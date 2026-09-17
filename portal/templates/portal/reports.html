@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Reports | IQARUS TMS{% endblock %}
+{% block page_heading %}Reports & Exports{% endblock %}
+{% block content %}
+<section class="module-page reports-page">
+  <header class="module-heading">
+    <div>
+      <p class="module-kicker">REPORTING</p>
+      <h2>Reports & Exports</h2>
+      <p>Monitor course progress, results, documents, acknowledgements and equipment use.</p>
+    </div>
+  </header>
+
+  <div class="report-metrics">
+    <article><strong>{{ course_count }}</strong><span>Total courses</span></article>
+    <article><strong>{{ open_registration_count }}</strong><span>Registration open</span></article>
+    <article><strong>{{ completed_course_count }}</strong><span>Completed courses</span></article>
+    <article><strong>{{ trained_students }}</strong><span>Students passed</span></article>
+  </div>
+
+  <nav class="report-tabs" aria-label="Report type">
+    <a class="{% if report_view == 'progress' %}active{% endif %}" href="?view=progress">Course progress</a>
+    <a class="{% if report_view == 'outcomes' %}active{% endif %}" href="?view=outcomes">Student outcomes</a>
+    <a class="{% if report_view == 'documents' %}active{% endif %}" href="?view=documents">Document status</a>
+    <a class="{% if report_view == 'instructors' %}active{% endif %}" href="?view=instructors">Instructor acknowledgement</a>
+    <a class="{% if report_view == 'inventory' %}active{% endif %}" href="?view=inventory">Equipment use</a>
+    <a class="{% if report_view == 'activity' %}active{% endif %}" href="?view=activity">Activity log</a>
+  </nav>
+
+  <div class="report-heading">
+    {% if report_view == "progress" %}
+      <div><h3>Course progress</h3><p>One course per row with its current operating position.</p></div>
+    {% elif report_view == "outcomes" %}
+      <div><h3>Student outcomes</h3><p>Registration, selection, result and nomination totals by course.</p></div>
+    {% elif report_view == "documents" %}
+      <div><h3>Document status</h3><p>Saved list, signed-list archive and external upload completion.</p></div>
+    {% elif report_view == "instructors" %}
+      <div><h3>Instructor acknowledgement</h3><p>One assigned instructor per row.</p></div>
+    {% elif report_view == "inventory" %}
+      <div><h3>Equipment use</h3><p>One instructor and item report per row.</p></div>
+    {% else %}
+      <div><h3>Activity log</h3><p>The latest 200 recorded actions, one action per row.</p></div>
+    {% endif %}
+  </div>
+
+  <div class="report-table-shell">
+  {% if report_view == "progress" %}
+    <table class="report-table">
+      <thead><tr><th>Course</th><th>Dates</th><th>Camp</th><th>Status</th><th>Instructors</th><th>Registration</th><th></th></tr></thead>
+      <tbody>{% for session in sessions %}<tr>
+        <td><strong>{{ session.course.title_english }}</strong></td>
+        <td>{{ session.start_date|date:"d M Y" }}<span>to {{ session.end_date|date:"d M Y" }}</span></td>
+        <td>{{ session.camp|default:"Not set" }}</td>
+        <td><span class="status-pill {% if session.status == 'cancelled' %}status-danger{% elif session.status == 'completed' %}status-success{% endif %}">{{ session.get_status_display }}</span></td>
+        <td>{{ session.acknowledged_count }} of {{ session.instructor_count }} acknowledged</td>
+        <td><strong>{{ session.registration_total }}</strong> registered</td>
+        <td><a class="table-action" href="{% url 'instructor_course_workspace' session.public_id %}">Open →</a></td>
+      </tr>{% empty %}<tr><td colspan="7" class="empty-table">No courses found.</td></tr>{% endfor %}</tbody>
+    </table>
+  {% elif report_view == "outcomes" %}
+    <table class="report-table">
+      <thead><tr><th>Course</th><th>Registered</th><th>Selected</th><th>Passed</th><th>Failed</th><th>Pending / other</th><th>HP</th><th>TTT</th></tr></thead>
+      <tbody>{% for session in sessions %}<tr>
+        <td><strong>{{ session.course.title_english }}</strong></td>
+        <td>{{ session.registration_total }}</td><td>{{ session.selected_total }}</td><td class="number-success">{{ session.passed_total }}</td><td class="number-danger">{{ session.failed_total }}</td><td>{{ session.pending_total }}</td><td>{{ session.hp_total }}</td><td>{{ session.ttt_total }}</td>
+      </tr>{% empty %}<tr><td colspan="8" class="empty-table">No course outcomes found.</td></tr>{% endfor %}</tbody>
+    </table>
+  {% elif report_view == "documents" %}
+    <table class="report-table">
+      <thead><tr><th>Course</th><th>Saved Day 1 list</th><th>Signed list archive</th><th>External upload file</th><th></th></tr></thead>
+      <tbody>{% for session in sessions %}<tr>
+        <td><strong>{{ session.course.title_english }}</strong></td>
+        <td>{% if session.has_saved_list %}<span class="status-pill status-success">Saved</span>{% else %}<span class="status-pill status-warning">Waiting</span>{% endif %}</td>
+        <td>{% if session.has_stamped_list %}<span class="status-pill status-success">Uploaded</span>{% else %}<span class="status-pill status-warning">Waiting</span>{% endif %}</td>
+        <td>{% if session.external_upload_confirmed_at %}<span class="status-pill status-success">Confirmed</span>{% elif session.external_upload_generated_at %}<span class="status-pill status-warning">Downloaded</span>{% else %}<span class="status-pill">Not prepared</span>{% endif %}</td>
+        <td><a class="table-action" href="{% url 'instructor_course_workspace' session.public_id %}">Open →</a></td>
+      </tr>{% empty %}<tr><td colspan="5" class="empty-table">No course documents found.</td></tr>{% endfor %}</tbody>
+    </table>
+  {% elif report_view == "instructors" %}
+    <table class="report-table">
+      <thead><tr><th>Course</th><th>Instructor</th><th>Information sent</th><th>Acknowledged</th><th>Status</th></tr></thead>
+      <tbody>{% for assignment in instructor_rows %}<tr>
+        <td><strong>{{ assignment.session.course.title_english }}</strong></td>
+        <td>{{ assignment.instructor.name_english }}</td>
+        <td>{{ assignment.notified_at|date:"d M Y H:i"|default:"Not sent" }}</td>
+        <td>{{ assignment.acknowledged_at|date:"d M Y H:i"|default:"—" }}</td>
+        <td>{% if assignment.acknowledged_at %}<span class="status-pill status-success">Acknowledged</span>{% elif assignment.notified_at %}<span class="status-pill status-warning">Waiting</span>{% else %}<span class="status-pill status-danger">Not sent</span>{% endif %}</td>
+      </tr>{% empty %}<tr><td colspan="5" class="empty-table">No instructor assignments found.</td></tr>{% endfor %}</tbody>
+    </table>
+  {% elif report_view == "inventory" %}
+    <table class="report-table">
+      <thead><tr><th>Course</th><th>Instructor</th><th>Item</th><th>Used</th><th>Consumed</th><th>Deteriorated</th><th>Updated</th></tr></thead>
+      <tbody>{% for usage in inventory_rows %}<tr>
+        <td><strong>{{ usage.session.course.title_english }}</strong></td>
+        <td>{{ usage.instructor.name_english }}</td><td>{{ usage.item.name }}</td><td>{{ usage.quantity_used }}</td><td>{{ usage.quantity_consumed }}</td><td>{{ usage.quantity_deteriorated }}</td><td>{{ usage.updated_at|date:"d M Y H:i" }}</td>
+      </tr>{% empty %}<tr><td colspan="7" class="empty-table">No equipment-use reports recorded yet.</td></tr>{% endfor %}</tbody>
+    </table>
+  {% else %}
+    <table class="report-table">
+      <thead><tr><th>Date</th><th>User</th><th>Action</th><th>Record</th><th>Description</th></tr></thead>
+      <tbody>{% for activity in recent_activity %}<tr>
+        <td>{{ activity.created_at|date:"d M Y H:i" }}</td><td>{{ activity.actor|default:"System" }}</td><td><span class="action-badge">{{ activity.get_action_display }}</span></td><td>{{ activity.object_type }}{% if activity.object_id %}<span>{{ activity.object_id }}</span>{% endif %}</td><td>{{ activity.description }}</td>
+      </tr>{% empty %}<tr><td colspan="5" class="empty-table">No activity recorded.</td></tr>{% endfor %}</tbody>
+    </table>
+  {% endif %}
+  </div>
+</section>
+{% endblock %}

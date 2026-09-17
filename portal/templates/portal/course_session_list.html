@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Course Directory | IQARUS TMS{% endblock %}
+{% block page_heading %}Course Directory{% endblock %}
+{% block content %}
+<section class="module-page">
+  <header class="module-heading">
+    <div>
+      <p class="module-kicker">MASTER DIRECTORY</p>
+      <h2>Course Directory</h2>
+      <p>One searchable list of every course session, assignment and registration status.</p>
+    </div>
+    <span class="result-total">{{ filtered_count }} result{{ filtered_count|pluralize }}</span>
+  </header>
+
+  <div class="directory-metrics">
+    <article><strong>{{ total_sessions }}</strong><span>All sessions</span></article>
+    <article><strong>{{ published_count }}</strong><span>Registration published</span></article>
+    <article><strong>{{ total_courses }}</strong><span>Course types</span></article>
+    <article><strong>{{ review_count }}</strong><span>Held for review</span></article>
+  </div>
+
+  <form method="get" class="directory-filters">
+    <div class="directory-search">
+      <label for="course-search">Search</label>
+      <input id="course-search" type="search" name="q" value="{{ current.q }}" placeholder="Course, camp or stored reference">
+    </div>
+    <div>
+      <label for="course-filter">Course</label>
+      <select id="course-filter" name="course">
+        <option value="">All courses</option>
+        {% for course in courses %}<option value="{{ course.pk }}" {% if current.course == course.pk|stringformat:"s" %}selected{% endif %}>{{ course }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="camp-filter">Camp</label>
+      <select id="camp-filter" name="camp">
+        <option value="">All camps</option>
+        {% for camp in camps %}<option value="{{ camp.pk }}" {% if current.camp == camp.pk|stringformat:"s" %}selected{% endif %}>{{ camp }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="status-filter">Status</label>
+      <select id="status-filter" name="status">
+        <option value="">All statuses</option>
+        {% for value, label in status_choices %}<option value="{{ value }}" {% if current.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="date-from">From</label>
+      <input id="date-from" type="date" name="date_from" value="{{ current.date_from }}">
+    </div>
+    <div>
+      <label for="date-to">To</label>
+      <input id="date-to" type="date" name="date_to" value="{{ current.date_to }}">
+    </div>
+    <div class="filter-actions">
+      <button type="submit" class="button-primary">Apply</button>
+      <a href="{% url 'courses_sessions' %}" class="button-secondary">Clear</a>
+    </div>
+  </form>
+
+  <div class="report-table-shell">
+    <table class="report-table course-directory-table">
+      <thead><tr><th>Course</th><th>Dates</th><th>Camp</th><th>Instructors</th><th>Status</th><th>Registration</th><th></th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td><strong>{{ row.course }}</strong></td>
+          <td>{{ row.start_date|date:"d M Y" }}{% if row.end_date and row.end_date != row.start_date %}<span>to {{ row.end_date|date:"d M Y" }}</span>{% endif %}</td>
+          <td>{{ row.camp }}</td>
+          <td class="instructor-cell">{{ row.instructors }}</td>
+          <td><span class="status-pill">{{ row.status }}</span></td>
+          <td>{% if row.registration_published %}<span class="status-pill status-success">Open</span>{% else %}<span class="status-pill">Closed</span>{% endif %}</td>
+          <td><a class="table-action" href="{% url 'instructor_course_workspace' row.public_id %}">Open →</a></td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="7" class="empty-table">No courses match these filters.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if page_obj.paginator.num_pages > 1 %}
+  <nav class="pagination" aria-label="Course directory pages">
+    <span>Showing {{ page_obj.start_index }}–{{ page_obj.end_index }} of {{ filtered_count }}</span>
+    <div>
+      {% if page_obj.has_previous %}<a href="?{% if query_without_page %}{{ query_without_page }}&{% endif %}page={{ page_obj.previous_page_number }}">Previous</a>{% endif %}
+      <strong>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</strong>
+      {% if page_obj.has_next %}<a href="?{% if query_without_page %}{{ query_without_page }}&{% endif %}page={{ page_obj.next_page_number }}">Next</a>{% endif %}
+    </div>
+  </nav>
+  {% endif %}
+</section>
+{% endblock %}
