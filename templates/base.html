@@ -11,31 +11,53 @@
 <body>
 {% if user.is_authenticated %}
     <div class="app-shell">
-        <aside class="sidebar">
-            <a class="sidebar-brand" href="{% url 'dashboard' %}">
-                <span class="sidebar-logo">
+        <header class="site-header">
+            <div class="header-masthead">
+                <a class="sidebar-brand" href="{% url 'dashboard' %}">
+                    <span class="sidebar-logo">
                     <img
                         src="{% static 'images/iqarus-logo-transparent.png' %}"
                         alt="IQARUS — The Power of Health"
                     >
-                    <img
-                        class="logo-slogan-white"
-                        src="{% static 'images/iqarus-logo-transparent.png' %}"
-                        alt=""
-                        aria-hidden="true"
+                    </span>
+                </a>
+
+                <div class="header-tools">
+                    <form
+                        class="global-search"
+                        action="{% url 'students' %}"
+                        method="get"
                     >
-                </span>
-            </a>
+                        <input
+                            name="q"
+                            type="search"
+                            placeholder="Search students...."
+                            aria-label="Search students"
+                        >
+                    </form>
+
+                    <div class="account-block">
+                        <span class="user-name">
+                            {{ user.get_full_name|default:user.username }}
+                        </span>
+
+                        <form method="post" action="{% url 'logout' %}">
+                            {% csrf_token %}
+                            <button class="sign-out" type="submit">
+                                Sign out
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
 
             <nav class="navigation" aria-label="Main navigation">
-                <p class="nav-heading">Workspace</p>
-
                 <a href="{% url 'dashboard' %}"
                    class="nav-link {% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}">
                     Dashboard
                 </a>
                 <a href="{% url 'my_courses' %}"
-                   class="nav-link {% if request.resolver_match.url_name == 'my_courses' or request.resolver_match.url_name == 'instructor_course_workspace' %}active{% endif %}">
+                   class="nav-link {% if request.path|slice:":12" == '/my-courses/' %}active{% endif %}">
                     My Courses
                 </a>
                 <a href="{% url 'students' %}"
@@ -45,11 +67,11 @@
                 {% if operations_admin %}
                 <a href="{% url 'courses_sessions' %}"
                    class="nav-link {% if request.resolver_match.url_name == 'courses_sessions' or request.resolver_match.url_name == 'course_session_detail' %}active{% endif %}">
-                    Course Directory
+                    Directory
                 </a>
                 <a href="{% url 'people' %}"
                    class="nav-link {% if request.resolver_match.url_name == 'people' %}active{% endif %}">
-                    People & Teams
+                    People
                 </a>
                 {% endif %}
                 {% if inventory_access %}
@@ -61,59 +83,25 @@
                 {% if operations_admin %}
                 <a href="{% url 'reports' %}"
                    class="nav-link {% if request.resolver_match.url_name == 'reports' %}active{% endif %}">
-                    Reports & Exports
+                    Reports
                 </a>
                 {% endif %}
 
                 {% if operations_admin %}
-                <p class="nav-heading admin-heading">Administration</p>
                 <a href="{% url 'data_quality' %}"
                    class="nav-link {% if request.resolver_match.url_name == 'data_quality' %}active{% endif %}">
                     Data Quality
                 </a>
                 {% endif %}
                 {% if user.is_staff %}
-                <a href="/admin/" class="nav-link">
-                    System Admin
+                <a href="/admin/" class="nav-link {% if request.resolver_match.namespace == 'admin' %}active{% endif %}">
+                    Admin
                 </a>
                 {% endif %}
             </nav>
-        </aside>
+        </header>
 
         <section class="workspace">
-            <header class="workspace-header">
-                <div>
-                    <p class="workspace-label">IQARUS TMS PRO</p>
-                    <h1>{% block page_heading %}Dashboard{% endblock %}</h1>
-                </div>
-
-                <div class="header-tools">
-                    <form
-                        class="global-search"
-                        action="{% url 'students' %}"
-                        method="get"
-                    >
-                        <input
-                            name="q"
-                            type="search"
-                            placeholder="Search students..."
-                            aria-label="Search students"
-                        >
-                    </form>
-
-                    <span class="user-name">
-                        {{ user.get_full_name|default:user.username }}
-                    </span>
-
-                    <form method="post" action="{% url 'logout' %}">
-                        {% csrf_token %}
-                        <button class="sign-out" type="submit">
-                            Sign out
-                        </button>
-                    </form>
-                </div>
-            </header>
-
             <main class="workspace-content">
                 {% block content %}{% endblock %}
             </main>

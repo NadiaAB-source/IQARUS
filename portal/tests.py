@@ -1,6 +1,7 @@
 from io import BytesIO
 from pathlib import Path
 import tempfile
+import uuid
 
 from django.contrib.auth import get_user_model
 from django.core import mail
@@ -22,13 +23,17 @@ from .models import (
     CourseInstructor,
     CourseInstructorInventoryUsage,
     CourseSession,
+    CourseSessionProposal,
     Instructor,
     InstructorInventoryBalance,
     InstructorInventoryMovement,
     InstructorRole,
     InventoryItem,
     Registration,
+    SourceFile,
+    SourceRecord,
     Student,
+    Team,
     TrainingRecord,
 )
 
@@ -123,6 +128,67 @@ class SimpleCourseWorkflowTests(TestCase):
             submitted_unit="Unit",
             status=Registration.Status.PENDING,
         )
+
+    def _history_source_file(self):
+        return SourceFile.objects.create(
+            filename="historical-evidence.xlsx",
+            sha256=uuid.uuid4().hex.ljust(64, "0"),
+            records_found=1,
+            imported=True,
+        )
+
+    def _history_record(
+        self,
+        source_file,
+        *,
+        record_type,
+        eid,
+        raw_payload,
+        import_status=SourceRecord.ImportStatus.STAGED,
+        linked_instructor=None,
+        linked_registration=None,
+        linked_training_record=None,
+    ):
+        return SourceRecord.objects.create(
+            source_record_id=uuid.uuid4(),
+            source_file=source_file,
+            worksheet_name="History",
+            source_row_number=SourceRecord.objects.count() + 2,
+            record_type=record_type,
+            raw_payload=raw_payload,
+            derived_search_values={
+                "normalized_emirates_id": eid,
+            },
+            import_status=import_status,
+            linked_instructor=linked_instructor,
+            linked_registration=linked_registration,
+            linked_training_record=linked_training_record,
+        )
+
+    def _history_proposal(
+        self,
+        *records,
+        start_date,
+        course=None,
+        instructor_values=None,
+    ):
+        proposal = CourseSessionProposal.objects.create(
+            candidate_id=uuid.uuid4(),
+            proposal_source=(
+                CourseSessionProposal.ProposalSource.REGISTRATION
+            ),
+            proposed_course=course,
+            proposed_camp=self.camp,
+            start_date=start_date,
+            end_date=start_date,
+            camp_values=[self.camp.name],
+            unit_values=["PG"],
+            instructor_values=instructor_values or [],
+            evidence_records=len(records),
+            student_id_values=len(records),
+        )
+        proposal.source_records.add(*records)
+        return proposal
 
     def test_emirates_id_display_always_uses_dashes(self):
         raw = "784198012345678"
@@ -415,6 +481,54 @@ class SimpleCourseWorkflowTests(TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_material_used_layout_saves_one_used_up_value_per_instructor(self):
+        item = InventoryItem.objects.create(
+            name="Pressure Bandage",
+            category=InventoryItem.Category.CONSUMABLE,
+            unit="each",
+            quantity_on_hand=0,
+        )
+        balance = InstructorInventoryBalance.objects.create(
+            instructor=self.instructor,
+            item=item,
+            quantity_on_hand=20,
+            updated_by=self.admin,
+        )
+        session = self._create_course()
+        self.client.force_login(self.instructor_user)
+
+        response = self.client.get(
+            reverse("instructor_course_workspace", args=[session.public_id])
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Material Used")
+        self.assertContains(response, "Balance Before Course")
+        self.assertContains(response, "Used Up in Course")
+        self.assertContains(response, "Balance After Course")
+        self.assertContains(response, f'name="used_up_{item.id}"')
+        self.assertNotContains(response, f'name="consumed_{item.id}"')
+        self.assertNotContains(response, f'name="deteriorated_{item.id}"')
+
+        response = self.client.post(
+            reverse("course_inventory_save", args=[session.public_id]),
+            {
+                "instructor_id": self.instructor.id,
+                f"used_up_{item.id}": "5",
+                f"inventory_notes_{item.id}": "5 damaged",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        balance.refresh_from_db()
+        self.assertEqual(balance.quantity_on_hand, 15)
+        usage = CourseInstructorInventoryUsage.objects.get(
+            session=session,
+            instructor=self.instructor,
+            item=item,
+        )
+        self.assertEqual(usage.quantity_used, 5)
+        self.assertEqual(usage.quantity_consumed, 5)
+        self.assertEqual(usage.quantity_deteriorated, 0)
+
     def test_inventory_records_use_tabs_filters_and_25_row_pages(self):
         for number in range(26):
             item = InventoryItem.objects.create(
@@ -584,6 +698,607 @@ class SimpleCourseWorkflowTests(TestCase):
         self.assertContains(response, 'class="student-row')
         self.assertContains(response, ".roster{min-width:0;table-layout:fixed}")
         self.assertNotContains(response, 'class="toolbar"')
+
+    def test_dashboard_and_course_pages_use_reference_layout(self):
+        session = self._create_course()
+        registration = self._registration(session)
+        registration.selected_for_roster = True
+        registration.assessment_status = "passed"
+        registration.is_hp = True
+        registration.save(
+            update_fields=[
+                "selected_for_roster",
+                "assessment_status",
+                "is_hp",
+                "updated_at",
+            ]
+        )
+        self.client.force_login(self.admin)
+
+        response = self.client.get(
+            reverse("dashboard"),
+            {"date_from": "2026-01-01", "date_to": "2026-12-31"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'class="dashboard-filters"')
+        self.assertContains(response, 'class="summary-counter-card"', count=3)
+        self.assertContains(response, 'class="dashboard-chart"')
+        self.assertContains(response, 'class="dashboard-module-grid"')
+        self.assertContains(response, 'name="all_history"')
+        self.assertEqual(response.context["totals"]["courses"], 1)
+        self.assertEqual(response.context["totals"]["enrolled"], 1)
+        self.assertEqual(response.context["totals"]["passed"], 1)
+        self.assertEqual(response.context["totals"]["hp"], 1)
+
+        response = self.client.get(reverse("my_courses"), {"q": "COURSE INSTRUCTOR"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Search by course, camp, or instructor....")
+        self.assertContains(response, "Course Name")
+        self.assertContains(response, "Date(s)")
+        self.assertContains(response, "Enrolled 1")
+        self.assertContains(response, "Passed 1")
+
+        response = self.client.get(
+            reverse("instructor_course_workspace", args=[session.public_id])
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'class="course-stage-flow"')
+        self.assertContains(response, "Generate Stamp List")
+        self.assertContains(response, "Upload Stamp List")
+        self.assertContains(response, "Generate Front-End")
+        self.assertContains(response, "Upload Front-End")
+
+    def test_dashboard_combines_history_and_current_without_double_counting(self):
+        current_session = self._create_course()
+        current_student = Student.objects.create(
+            eid="784198012345678",
+            name_english="CURRENT STUDENT",
+        )
+        current_registration = self._registration(current_session)
+        current_registration.student = current_student
+        current_registration.selected_for_roster = True
+        current_registration.assessment_status = "passed"
+        current_registration.is_hp = True
+        current_registration.save()
+        TrainingRecord.objects.create(
+            student=current_student,
+            session=current_session,
+            attendance=TrainingRecord.Attendance.PRESENT,
+            result=TrainingRecord.Result.PASS,
+            record_status=TrainingRecord.RecordStatus.COMPLETED,
+            is_hp=True,
+            raw_payload={
+                "registration_public_id": str(current_registration.public_id)
+            },
+        )
+        pending_registration = self._registration(
+            current_session,
+            eid="784198112345678",
+            name_english="PENDING STUDENT",
+            email="pending@example.com",
+        )
+        pending_registration.selected_for_roster = True
+        pending_registration.save(update_fields=["selected_for_roster", "updated_at"])
+
+        historical_session = CourseSession.objects.create(
+            course=self.course,
+            camp=self.camp,
+            start_date="2026-02-01",
+            end_date="2026-02-02",
+            status=CourseSession.Status.COMPLETED,
+        )
+        CourseInstructor.objects.create(
+            session=historical_session,
+            instructor=self.instructor,
+        )
+        historical_student = Student.objects.create(
+            eid="784198212345678",
+            name_english="HISTORICAL STUDENT",
+        )
+        TrainingRecord.objects.create(
+            student=historical_student,
+            session=historical_session,
+            attendance=TrainingRecord.Attendance.PRESENT,
+            result=TrainingRecord.Result.FAIL,
+            record_status=TrainingRecord.RecordStatus.COMPLETED,
+            is_ttt=True,
+        )
+        TrainingRecord.objects.create(
+            student=historical_student,
+            session=historical_session,
+            attendance=TrainingRecord.Attendance.PRESENT,
+            result=TrainingRecord.Result.PASS,
+            record_status=TrainingRecord.RecordStatus.COMPLETED,
+            is_hp=True,
+            duplicate_flag=True,
+        )
+        Registration.objects.create(
+            requested_session=historical_session,
+            submitted_name_english="REJECTED STUDENT",
+            status=Registration.Status.REJECTED,
+        )
+
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            reverse("dashboard"),
+            {"date_from": "2026-01-01", "date_to": "2026-12-31"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["totals"]["courses"], 2)
+        self.assertEqual(response.context["totals"]["enrolled"], 3)
+        self.assertEqual(response.context["totals"]["passed"], 1)
+        self.assertEqual(response.context["totals"]["failed"], 1)
+        self.assertEqual(response.context["totals"]["rejected"], 1)
+        self.assertEqual(response.context["totals"]["hp"], 1)
+        self.assertEqual(response.context["totals"]["ttt"], 1)
+        february = response.context["chart_rows"][1]
+        september = response.context["chart_rows"][8]
+        self.assertEqual(february["enrolled"], 1)
+        self.assertEqual(february["failed"], 1)
+        self.assertEqual(february["rejected"], 1)
+        self.assertEqual(september["enrolled"], 2)
+        self.assertEqual(september["passed"], 1)
+
+    def test_dashboard_keeps_date_range_and_offers_all_history(self):
+        current_session = self._create_course()
+        current_student = Student.objects.create(
+            eid="784198312345678",
+            name_english="CURRENT YEAR STUDENT",
+        )
+        TrainingRecord.objects.create(
+            student=current_student,
+            session=current_session,
+            result=TrainingRecord.Result.FAIL,
+        )
+        historical_session = CourseSession.objects.create(
+            course=self.course,
+            camp=self.camp,
+            start_date="2024-03-10",
+            end_date="2024-03-11",
+            status=CourseSession.Status.COMPLETED,
+        )
+        historical_student = Student.objects.create(
+            eid="784198412345678",
+            name_english="OLDER HISTORY STUDENT",
+        )
+        TrainingRecord.objects.create(
+            student=historical_student,
+            session=historical_session,
+            result=TrainingRecord.Result.PASS,
+        )
+
+        self.client.force_login(self.admin)
+        current_response = self.client.get(
+            reverse("dashboard"),
+            {"date_from": "2026-01-01", "date_to": "2026-12-31"},
+        )
+        self.assertFalse(current_response.context["all_history"])
+        self.assertEqual(current_response.context["totals"]["courses"], 1)
+        self.assertEqual(current_response.context["totals"]["enrolled"], 1)
+        self.assertEqual(current_response.context["totals"]["failed"], 1)
+
+        all_response = self.client.get(
+            reverse("dashboard"),
+            {
+                "date_from": "2026-01-01",
+                "date_to": "2026-12-31",
+                "all_history": "1",
+            },
+        )
+        self.assertTrue(all_response.context["all_history"])
+        self.assertContains(all_response, 'name="all_history" value="1" checked')
+        self.assertEqual(all_response.context["totals"]["courses"], 2)
+        self.assertEqual(all_response.context["totals"]["enrolled"], 2)
+        self.assertEqual(all_response.context["totals"]["passed"], 1)
+        self.assertEqual(all_response.context["totals"]["failed"], 1)
+
+        historical_response = self.client.get(
+            reverse("dashboard"),
+            {"date_from": "2024-01-01", "date_to": "2024-12-31"},
+        )
+        self.assertFalse(historical_response.context["all_history"])
+        self.assertEqual(historical_response.context["totals"]["courses"], 1)
+        self.assertEqual(historical_response.context["totals"]["enrolled"], 1)
+        self.assertEqual(historical_response.context["totals"]["passed"], 1)
+        self.assertEqual(historical_response.context["totals"]["failed"], 0)
+
+    def test_dashboard_includes_deduplicated_historical_evidence(self):
+        session = self._create_course()
+        current_student = Student.objects.create(
+            eid="784198012345678",
+            name_english="CURRENT STUDENT",
+        )
+        TrainingRecord.objects.create(
+            student=current_student,
+            session=session,
+            attendance=TrainingRecord.Attendance.PRESENT,
+            result=TrainingRecord.Result.PASS,
+            record_status=TrainingRecord.RecordStatus.COMPLETED,
+            is_hp=True,
+        )
+
+        source_file = self._history_source_file()
+        historical_registration = self._history_record(
+            source_file,
+            record_type="registration_submission",
+            eid="784198112345678",
+            raw_payload={
+                "date_التاريخ": {
+                    "value": "2026-08-03T00:00:00",
+                    "excel_type": "datetime",
+                },
+                "camp_المعسكر": "Historical Camp",
+                "unit_location_الوحدة_الموقع": "PG",
+                "instructor": "Course Instructor",
+            },
+            import_status=SourceRecord.ImportStatus.CONVERTED,
+        )
+        self._history_proposal(
+            historical_registration,
+            start_date="2026-08-03",
+            course=self.course,
+        )
+
+        attendance = self._history_record(
+            source_file,
+            record_type="course_attendance_evidence",
+            eid="784198212345678",
+            raw_payload={"session1": "YES", "session2": "YES"},
+        )
+        result = self._history_record(
+            source_file,
+            record_type="course_result_evidence",
+            eid="784198212345678",
+            raw_payload={"comment": "PASS"},
+        )
+        self._history_proposal(
+            attendance,
+            result,
+            start_date="2026-08-19",
+            course=self.course,
+        )
+
+        self._history_record(
+            source_file,
+            record_type="ttt_candidate_evidence",
+            eid="784198312345678",
+            raw_payload={
+                "training_date": "16-Jul_26",
+                "camp_name": "Historical Camp",
+                "unit": "PG",
+                "instructor_1": "Course Instructor",
+            },
+        )
+        ignored_result = self._history_record(
+            source_file,
+            record_type="course_result_evidence",
+            eid="784198412345678",
+            raw_payload={"comment": "FAIL"},
+            import_status=SourceRecord.ImportStatus.IGNORED,
+        )
+        self._history_proposal(
+            ignored_result,
+            start_date="2026-08-20",
+            course=self.course,
+        )
+        Student.objects.create(
+            eid="784198512345678",
+            name_english="PROFILE WITHOUT PARTICIPATION",
+        )
+
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            reverse("dashboard"),
+            {"date_from": "2026-01-01", "date_to": "2026-12-31"},
+        )
+
+        totals = response.context["totals"]
+        self.assertEqual(totals["courses"], 1)
+        self.assertEqual(totals["enrolled"], 3)
+        self.assertEqual(totals["passed"], 2)
+        self.assertEqual(totals["failed"], 0)
+        self.assertEqual(totals["hp"], 1)
+        self.assertEqual(totals["ttt"], 1)
+        self.assertEqual(response.context["chart_rows"][7]["enrolled"], 2)
+        self.assertEqual(response.context["chart_rows"][7]["passed"], 1)
+
+        course_response = self.client.get(
+            reverse("dashboard"),
+            {
+                "course": str(self.course.pk),
+                "date_from": "2026-01-01",
+                "date_to": "2026-12-31",
+            },
+        )
+        self.assertEqual(course_response.context["totals"]["enrolled"], 3)
+
+        other_course = Course.objects.create(
+            code="OTHER",
+            title_english="Other Course",
+        )
+        other_response = self.client.get(
+            reverse("dashboard"),
+            {
+                "course": str(other_course.pk),
+                "date_from": "2026-01-01",
+                "date_to": "2026-12-31",
+            },
+        )
+        self.assertEqual(other_response.context["totals"]["enrolled"], 0)
+
+    def test_dashboard_historical_evidence_respects_dates_and_all_history(self):
+        source_file = self._history_source_file()
+        current_year = self._history_record(
+            source_file,
+            record_type="registration_submission",
+            eid="784198612345678",
+            raw_payload={"date_التاريخ": "2026-08-03"},
+        )
+        self._history_proposal(
+            current_year,
+            start_date="2026-08-03",
+            course=self.course,
+        )
+        old_attendance = self._history_record(
+            source_file,
+            record_type="course_attendance_evidence",
+            eid="784198712345678",
+            raw_payload={"session1": "YES", "session2": "YES"},
+        )
+        old_result = self._history_record(
+            source_file,
+            record_type="course_result_evidence",
+            eid="784198712345678",
+            raw_payload={"comment": "PASS"},
+        )
+        self._history_proposal(
+            old_attendance,
+            old_result,
+            start_date="2024-03-10",
+            course=self.course,
+        )
+        self._history_record(
+            source_file,
+            record_type="registration_submission",
+            eid="784198812345678",
+            raw_payload={"camp_المعسكر": "Undated Camp"},
+        )
+
+        self.client.force_login(self.admin)
+        current_response = self.client.get(
+            reverse("dashboard"),
+            {"date_from": "2026-01-01", "date_to": "2026-12-31"},
+        )
+        self.assertEqual(current_response.context["totals"]["enrolled"], 1)
+        self.assertEqual(current_response.context["totals"]["passed"], 0)
+
+        all_response = self.client.get(
+            reverse("dashboard"),
+            {
+                "date_from": "2026-01-01",
+                "date_to": "2026-12-31",
+                "all_history": "1",
+            },
+        )
+        self.assertEqual(all_response.context["totals"]["enrolled"], 3)
+        self.assertEqual(all_response.context["totals"]["passed"], 1)
+        self.assertEqual(all_response.context["chart_rows"][2]["enrolled"], 1)
+        self.assertEqual(all_response.context["chart_rows"][2]["passed"], 1)
+
+        old_response = self.client.get(
+            reverse("dashboard"),
+            {"date_from": "2024-01-01", "date_to": "2024-12-31"},
+        )
+        self.assertEqual(old_response.context["totals"]["enrolled"], 1)
+        self.assertEqual(old_response.context["totals"]["passed"], 1)
+
+    def test_dashboard_canonical_training_precedes_source_evidence(self):
+        session = self._create_course()
+        student = Student.objects.create(
+            eid="784198912345678",
+            name_english="CANONICAL STUDENT",
+        )
+        training = TrainingRecord.objects.create(
+            student=student,
+            session=session,
+            attendance=TrainingRecord.Attendance.PRESENT,
+            result=TrainingRecord.Result.PASS,
+            record_status=TrainingRecord.RecordStatus.COMPLETED,
+        )
+        source_file = self._history_source_file()
+        source_result = self._history_record(
+            source_file,
+            record_type="course_result_evidence",
+            eid=student.eid,
+            raw_payload={"comment": "FAIL"},
+            linked_training_record=training,
+        )
+        proposal = self._history_proposal(
+            source_result,
+            start_date="2026-09-01",
+            course=self.course,
+        )
+        proposal.approved_session = session
+        proposal.save(update_fields=["approved_session", "updated_at"])
+
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            reverse("dashboard"),
+            {"date_from": "2026-01-01", "date_to": "2026-12-31"},
+        )
+        self.assertEqual(response.context["totals"]["enrolled"], 1)
+        self.assertEqual(response.context["totals"]["passed"], 1)
+        self.assertEqual(response.context["totals"]["failed"], 0)
+
+    def test_dashboard_linked_rejection_is_not_counted_twice(self):
+        session = self._create_course()
+        source_file = self._history_source_file()
+        rejected_registration = Registration.objects.create(
+            requested_session=session,
+            submitted_name_english="REJECTED STUDENT",
+            eid_raw="784-1994-1234567-8",
+            eid_normalized="784199412345678",
+            status=Registration.Status.REJECTED,
+            selected_for_roster=True,
+            source_file=source_file,
+        )
+        source = self._history_record(
+            source_file,
+            record_type="registration_submission",
+            eid=rejected_registration.eid_normalized,
+            raw_payload={"date_\u0627\u0644\u062a\u0627\u0631\u064a\u062e": "2026-09-01"},
+            linked_registration=rejected_registration,
+        )
+        self._history_proposal(
+            source,
+            start_date="2026-09-01",
+            course=self.course,
+        )
+
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            reverse("dashboard"),
+            {"date_from": "2026-01-01", "date_to": "2026-12-31"},
+        )
+        self.assertEqual(response.context["totals"]["enrolled"], 0)
+        self.assertEqual(response.context["totals"]["rejected"], 1)
+
+    def test_dashboard_history_survives_approval_and_pending_duplicate_review(self):
+        session = self._create_course()
+        source_file = self._history_source_file()
+        first_submission = self._history_record(
+            source_file,
+            record_type="registration_submission",
+            eid="784199312345678",
+            raw_payload={"date_التاريخ": "2026-08-03"},
+        )
+        repeated_submission = self._history_record(
+            source_file,
+            record_type="registration_submission",
+            eid="784199312345678",
+            raw_payload={"date_التاريخ": "2026-08-03"},
+        )
+        self._history_proposal(
+            first_submission,
+            repeated_submission,
+            start_date="2026-08-03",
+            course=self.course,
+        )
+
+        approved_submission = self._history_record(
+            source_file,
+            record_type="registration_submission",
+            eid="784199412345678",
+            raw_payload={"date_التاريخ": "2026-09-01"},
+        )
+        approved_proposal = self._history_proposal(
+            approved_submission,
+            start_date="2026-09-01",
+            course=self.course,
+        )
+        approved_proposal.approved_session = session
+        approved_proposal.proposal_status = (
+            CourseSessionProposal.ProposalStatus.APPROVED
+        )
+        approved_proposal.save(
+            update_fields=[
+                "approved_session",
+                "proposal_status",
+                "updated_at",
+            ]
+        )
+
+        cancelled_student = Student.objects.create(
+            eid="784199512345678",
+            name_english="CANCELLED CANONICAL ROW",
+        )
+        cancelled_training = TrainingRecord.objects.create(
+            student=cancelled_student,
+            session=session,
+            result=TrainingRecord.Result.PASS,
+            record_status=TrainingRecord.RecordStatus.CANCELLED,
+        )
+        retained_result = self._history_record(
+            source_file,
+            record_type="course_result_evidence",
+            eid=cancelled_student.eid,
+            raw_payload={"comment": "PASS"},
+            linked_training_record=cancelled_training,
+        )
+        self._history_proposal(
+            retained_result,
+            start_date="2026-09-01",
+            course=self.course,
+        )
+
+        self.client.force_login(self.admin)
+        response = self.client.get(
+            reverse("dashboard"),
+            {"date_from": "2026-01-01", "date_to": "2026-12-31"},
+        )
+        self.assertEqual(response.context["totals"]["enrolled"], 4)
+        self.assertEqual(response.context["totals"]["passed"], 1)
+
+    def test_dashboard_historical_team_and_instructor_scope_are_trusted(self):
+        team_a = Team.objects.create(name="Historical Team A")
+        team_b = Team.objects.create(name="Historical Team B")
+        self.unassigned_instructor.team = team_a
+        self.unassigned_instructor.save(update_fields=["team", "updated_at"])
+        self.instructor.team = team_b
+        self.instructor.save(update_fields=["team", "updated_at"])
+
+        source_file = self._history_source_file()
+        own = self._history_record(
+            source_file,
+            record_type="registration_submission",
+            eid="784199012345678",
+            raw_payload={"date_التاريخ": "2026-08-03"},
+            linked_instructor=self.unassigned_instructor,
+        )
+        other = self._history_record(
+            source_file,
+            record_type="registration_submission",
+            eid="784199112345678",
+            raw_payload={"date_التاريخ": "2026-08-03"},
+            linked_instructor=self.instructor,
+        )
+        unresolved = self._history_record(
+            source_file,
+            record_type="registration_submission",
+            eid="784199212345678",
+            raw_payload={"date_التاريخ": "2026-08-03"},
+        )
+        for record in (own, other, unresolved):
+            self._history_proposal(
+                record,
+                start_date="2026-08-03",
+                course=self.course,
+            )
+
+        self.client.force_login(self.admin)
+        team_response = self.client.get(
+            reverse("dashboard"),
+            {
+                "team": str(team_a.pk),
+                "date_from": "2026-01-01",
+                "date_to": "2026-12-31",
+            },
+        )
+        self.assertEqual(team_response.context["totals"]["enrolled"], 1)
+
+        all_teams_response = self.client.get(
+            reverse("dashboard"),
+            {"date_from": "2026-01-01", "date_to": "2026-12-31"},
+        )
+        self.assertEqual(all_teams_response.context["totals"]["enrolled"], 3)
+
+        self.client.force_login(self.unassigned_user)
+        instructor_response = self.client.get(
+            reverse("dashboard"),
+            {"date_from": "2026-01-01", "date_to": "2026-12-31"},
+        )
+        self.assertEqual(instructor_response.context["totals"]["enrolled"], 1)
 
     def test_existing_student_and_previous_same_course_require_review(self):
         session = self._create_course()
@@ -808,7 +1523,7 @@ class SimpleCourseWorkflowTests(TestCase):
         self.client.force_login(self.admin)
         response = self.client.get(reverse("dashboard"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Course Directory", count=2)
+        self.assertContains(response, "Directory", count=2)
         self.assertContains(response, "iqarus-logo-transparent")
 
         self.client.force_login(self.unassigned_user)

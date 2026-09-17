@@ -194,6 +194,9 @@ def my_courses(request):
             Q(reference_code__icontains=search)
             | Q(course__title_english__icontains=search)
             | Q(camp__name__icontains=search)
+            | Q(
+                instructor_assignments__instructor__name_english__icontains=search
+            )
         )
     sessions = sessions.distinct().order_by("-start_date", "-id")
     rows = []
@@ -211,15 +214,29 @@ def my_courses(request):
             ),
             None,
         )
+        registrations = session.registrations.all()
+        selected_registrations = registrations.filter(selected_for_roster=True)
         rows.append(
             {
                 "session": session,
                 "display_reference": display_reference(session),
                 "assignments": assignments,
-                "registration_count": session.registrations.count(),
-                "selected_count": session.registrations.filter(
-                    selected_for_roster=True
+                "registration_count": registrations.count(),
+                "selected_count": selected_registrations.count(),
+                "passed_count": selected_registrations.filter(
+                    assessment_status="passed"
                 ).count(),
+                "failed_count": selected_registrations.filter(
+                    assessment_status="failed"
+                ).count(),
+                "rejected_count": registrations.filter(
+                    Q(status=Registration.Status.REJECTED)
+                    | Q(
+                        duplicate_review_status=(
+                            Registration.DuplicateReviewStatus.EXCLUDED
+                        )
+                    )
+                ).distinct().count(),
                 "own_assignment": own_assignment,
             }
         )
@@ -556,11 +573,20 @@ def course_workspace(request, public_id):
         ):
             balance = instructor_balances.get(item_id)
             usage = instructor_usage.get(item_id)
+            used_up = (
+                (usage.quantity_consumed + usage.quantity_deteriorated)
+                if usage
+                else 0
+            )
+            balance_after = balance.quantity_on_hand if balance else 0
             section_rows.append(
                 {
                     "item": balance.item if balance else usage.item,
                     "balance": balance,
                     "usage": usage,
+                    "balance_before": balance_after + used_up,
+                    "used_up": used_up,
+                    "balance_after": balance_after,
                 }
             )
         inventory_sections.append(
@@ -584,6 +610,15 @@ def course_workspace(request, public_id):
             "selected_count": len(selected),
             "passed_count": sum(
                 row["registration"].assessment_status == "passed" for row in selected
+            ),
+            "failed_count": sum(
+                row["registration"].assessment_status == "failed" for row in selected
+            ),
+            "rejected_count": sum(
+                row["registration"].status == Registration.Status.REJECTED
+                or row["registration"].duplicate_review_status
+                == Registration.DuplicateReviewStatus.EXCLUDED
+                for row in rows
             ),
             "warning_count": sum(
                 row["review_state"] == "required" for row in rows
@@ -1161,15 +1196,28 @@ def save_course_inventory(request, public_id):
                 balance = balances.get(item_id)
                 existing = usages.get(item_id)
                 item = balance.item if balance else existing.item
-                used = _nonnegative_integer(
-                    request, f"used_{item_id}", item.name
-                )
-                consumed = _nonnegative_integer(
-                    request, f"consumed_{item_id}", item.name
-                )
-                deteriorated = _nonnegative_integer(
-                    request, f"deteriorated_{item_id}", item.name
-                )
+                used_up_field = f"used_up_{item_id}"
+                if used_up_field in request.POST:
+                    used = _nonnegative_integer(
+                        request, used_up_field, item.name
+                    )
+                    if item.category == InventoryItem.Category.CONSUMABLE:
+                        consumed = used
+                        deteriorated = 0
+                    else:
+                        consumed = 0
+                        deteriorated = used
+                else:
+                    # Backwards-compatible input handling for an older open form.
+                    used = _nonnegative_integer(
+                        request, f"used_{item_id}", item.name
+                    )
+                    consumed = _nonnegative_integer(
+                        request, f"consumed_{item_id}", item.name
+                    )
+                    deteriorated = _nonnegative_integer(
+                        request, f"deteriorated_{item_id}", item.name
+                    )
                 notes = request.POST.get(
                     f"inventory_notes_{item_id}", ""
                 ).strip()[:1000]

@@ -1,31 +1,19 @@
 # IQARUS TMS PRO
 
-Private source repository for the IQARUS Training Management System.
+Current source checkpoint: 17 September 2026, based on `IQARUS_SIMPLE_REBUILD (30)`.
 
-## Repository safety
+This repository contains the Django application source only. It intentionally excludes the live SQLite database, student records, uploaded and generated files, backups, passwords, email credentials, and Colab installer files.
 
-This source package intentionally excludes:
+## Local setup
 
-- The live SQLite database and all student records.
-- Saved course lists and uploaded stamped lists.
-- Passwords, email credentials, secret keys and environment files.
-- Colab installer and backup files.
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py collectstatic --noinput
+python manage.py runserver
+```
 
-Never commit `db.sqlite3`, `.env`, passwords, tokens, generated student files or
-uploaded documents to GitHub.
+Configure deployment values through environment variables, including `SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS`, `DATABASE_URL`, and the email settings used by the application.
 
-## Application
-
-- Framework: Django 5.2
-- Production server: Gunicorn
-- Static files: WhiteNoise
-- Database configuration: `DATABASE_URL`
-- Spreadsheet generation: OpenPyXL and pandas
-- QR generation: qrcode/Pillow
-
-The application must be deployed to a Django-compatible hosting service with a
-production database. GitHub stores the source code; GitHub Pages does not run
-the Django application.
-
-Production hosting configuration and transfer of approved live data will be
-handled as a separate deployment step.
