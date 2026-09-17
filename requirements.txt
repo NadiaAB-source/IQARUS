@@ -1,9 +1,0 @@
-Django>=5.2,<5.3
-gunicorn
-whitenoise
-dj-database-url
-psycopg[binary]
-openpyxl
-pandas
-Pillow
-qrcode[pil]>=7.4,<9
